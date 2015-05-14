@@ -12,7 +12,7 @@
 namespace ONGR\ElasticsearchBundle\Result;
 
 use ONGR\ElasticsearchBundle\Document\DocumentInterface;
-use ONGR\ElasticsearchBundle\DSL\Aggregation\Aggregations;
+use ONGR\ElasticsearchBundle\DSL\Aggregation\AbstractAggregation;
 use ONGR\ElasticsearchBundle\Result\Aggregation\AggregationIterator;
 use ONGR\ElasticsearchBundle\Result\Suggestion\SuggestionIterator;
 
@@ -89,7 +89,8 @@ class DocumentIterator extends AbstractResultsIterator
      *
      * @param array $rawData
      *
-     * @return DocumentInterface Document
+     * @return DocumentInterface
+     *
      * @throws \LogicException
      */
     protected function convertDocument($rawData)
@@ -128,7 +129,7 @@ class DocumentIterator extends AbstractResultsIterator
             $data = [];
 
             foreach ($this->rawData['aggregations'] as $key => $value) {
-                $realKey = substr($key, strlen(Aggregations::PREFIX));
+                $realKey = substr($key, strlen(AbstractAggregation::PREFIX));
                 $data[$realKey] = $value;
             }
 

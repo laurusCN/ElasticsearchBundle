@@ -17,7 +17,7 @@ namespace ONGR\ElasticsearchBundle\Annotation;
  * @Annotation
  * @Target("ANNOTATION")
  */
-final class MultiField
+final class MultiField extends AbstractProperty
 {
     /**
      * @var string
@@ -46,23 +46,10 @@ final class MultiField
     /**
      * @var string
      */
-    public $index_analyzer;
+    public $indexAnalyzer;
 
     /**
      * @var string
      */
-    public $search_analyzer;
-
-    /**
-     * Filters object values.
-     *
-     * @return array
-     */
-    public function filter()
-    {
-        return array_diff_key(
-            array_filter(get_object_vars($this)),
-            array_flip(['name'])
-        );
-    }
+    public $searchAnalyzer;
 }

@@ -12,8 +12,6 @@
 namespace ONGR\ElasticsearchBundle\Tests\app\fixture\Acme\TestBundle\Document;
 
 use ONGR\ElasticsearchBundle\Annotation as ES;
-use ONGR\ElasticsearchBundle\Document\DocumentInterface;
-use ONGR\ElasticsearchBundle\Document\DocumentTrait;
 
 /**
  * Product document for testing.
@@ -22,10 +20,8 @@ use ONGR\ElasticsearchBundle\Document\DocumentTrait;
  * @ES\Skip({"name"})
  * @ES\Inherit({"price"})
  */
-class Product extends Item implements DocumentInterface
+class Product extends Item
 {
-    use DocumentTrait;
-
     /**
      * @var string
      *
@@ -44,12 +40,12 @@ class Product extends Item implements DocumentInterface
      * @var PriceLocationSuggesting
      *
      * @ES\Suggester\ContextSuggesterProperty(
-     *   name = "suggestions",
-     *   objectName = "AcmeTestBundle:PriceLocationSuggesting",
-     *   payloads = true,
-     *   context = {
-     * @ES\Suggester\Context\GeoLocationContext(name="location", precision = "5m", neighbors = true, default = "u33"),
-     * @ES\Suggester\Context\CategoryContext(name="price", default = {"red", "green"}, path = "description")
+     *   name="suggestions",
+     *   objectName="AcmeTestBundle:PriceLocationSuggesting",
+     *   payloads=true,
+     *   context={
+     * @ES\Suggester\Context\GeoLocationContext(name="location", precision="5m", neighbors=true, default="u33"),
+     * @ES\Suggester\Context\CategoryContext(name="price", default={"red", "green"}, path="description")
      *   }
      * )
      */
@@ -59,11 +55,11 @@ class Product extends Item implements DocumentInterface
      * @var CompletionSuggesting
      *
      * @ES\Suggester\CompletionSuggesterProperty(
-     *  name = "completion_suggesting",
-     *  objectName = "AcmeTestBundle:CompletionSuggesting",
-     *  index_analyzer = "simple",
-     *  search_analyzer = "simple",
-     *  payloads = false,
+     *  name="completion_suggesting",
+     *  objectName="AcmeTestBundle:CompletionSuggesting",
+     *  indexAnalyzer="simple",
+     *  searchAnalyzer="simple",
+     *  payloads=false,
      *  )
      */
     public $completionSuggesting;
@@ -78,9 +74,16 @@ class Product extends Item implements DocumentInterface
     /**
      * @var string
      *
-     * @ES\Property(type="geo_point", name="location")
+     * @ES\Property(type="geo_point", name="location", geohash=true, geohashPrefix=true, geohashPrecision="1km")
      */
     public $location;
+
+    /**
+     * @var string
+     *
+     * @ES\Property(type="geo_shape", name="shape")
+     */
+    public $shape;
 
     /**
      * @var UrlObject[]|\Iterator
@@ -102,4 +105,25 @@ class Product extends Item implements DocumentInterface
      * @ES\Property(type="object", objectName="AcmeTestBundle:Category", multiple=true, name="categories")
      */
     public $categories;
+
+    /**
+     * @var string
+     *
+     * @ES\Property(type="ip", name="ip")
+     */
+    public $ip;
+
+    /**
+     * @var string
+     *
+     * @ES\Property(type="string", name="limited", index="not_analyzed", ignoreAbove=20)
+     */
+    public $limited;
+
+    /**
+     * @var string
+     *
+     * @ES\Property(type="string", name="stored", store=true, indexName="ongr-esb-test")
+     */
+    public $stored;
 }

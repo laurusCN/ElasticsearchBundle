@@ -33,6 +33,30 @@ class ElasticsearchExtensionTest extends WebTestCase
                 'es.manager.bar',
                 'ONGR\ElasticsearchBundle\ORM\Manager',
             ],
+            [
+                'es.manager.default.product',
+                'ONGR\ElasticsearchBundle\ORM\Repository',
+            ],
+            [
+                'es.manager.default.bar',
+                'ONGR\ElasticsearchBundle\ORM\Repository',
+            ],
+            [
+                'es.manager.default.color',
+                'ONGR\ElasticsearchBundle\ORM\Repository',
+            ],
+            [
+                'es.manager.default.colordocument',
+                'ONGR\ElasticsearchBundle\ORM\Repository',
+            ],
+            [
+                'es.manager.default.media',
+                'ONGR\ElasticsearchBundle\ORM\Repository',
+            ],
+            [
+                'es.metadata_collector',
+                'ONGR\ElasticsearchBundle\Mapping\MetadataCollector',
+            ],
         ];
     }
 
@@ -61,16 +85,12 @@ class ElasticsearchExtensionTest extends WebTestCase
 
         $expectedConnections = [
             'default' => [
-                'hosts' => ['127.0.0.1:9200'],
-                'index_name' => 'ongr-elasticsearch-bundle-test',
                 'settings' => [
                     'refresh_interval' => -1,
                     'number_of_replicas' => 0,
                 ],
             ],
             'bar' => [
-                'hosts' => ['127.0.0.1:9200'],
-                'index_name' => 'ongr-elasticsearch-bundle-bar-test',
                 'settings' => [
                     'refresh_interval' => -1,
                     'number_of_replicas' => 1,
@@ -82,18 +102,38 @@ class ElasticsearchExtensionTest extends WebTestCase
         $expectedManagers = [
             'default' => [
                 'connection' => 'default',
-                'debug' => true,
-                'mappings' => ['AcmeTestBundle'],
+                'debug' => [
+                    'enabled' => true,
+                    'level' => 'warning',
+                ],
+                'readonly' => false,
+                'mappings' => [
+                    'AcmeTestBundle',
+                    'AcmeFooBundle:Media',
+                ],
             ],
             'bar' => [
                 'connection' => 'bar',
-                'debug' => false,
+                'debug' => [
+                    'enabled' => false,
+                    'level' => 'warning',
+                ],
+                'readonly' => false,
                 'mappings' => ['ONGRElasticsearchBundle'],
+            ],
+            'readonly' => [
+                'connection' => 'default',
+                'debug' => [
+                    'enabled' => true,
+                    'level' => 'warning',
+                ],
+                'readonly' => true,
+                'mappings' => ['AcmeTestBundle'],
             ],
         ];
         $actualManagers = $container->getParameter('es.managers');
 
-        $this->assertEquals($expectedConnections, $actualConnections);
+        $this->assertArraySubset($expectedConnections, $actualConnections);
         $this->assertEquals($expectedManagers, $actualManagers);
     }
 }

@@ -11,15 +11,16 @@
 
 namespace ONGR\ElasticsearchBundle\ORM;
 
+use Elasticsearch\Common\Exceptions\Missing404Exception;
 use ONGR\ElasticsearchBundle\Document\DocumentInterface;
 use ONGR\ElasticsearchBundle\DSL\Query\TermsQuery;
 use ONGR\ElasticsearchBundle\DSL\Search;
 use ONGR\ElasticsearchBundle\DSL\Sort\Sort;
 use ONGR\ElasticsearchBundle\DSL\Suggester\AbstractSuggester;
-use ONGR\ElasticsearchBundle\DSL\Suggester\Suggesters;
 use ONGR\ElasticsearchBundle\Result\Converter;
 use ONGR\ElasticsearchBundle\Result\DocumentIterator;
 use ONGR\ElasticsearchBundle\Result\DocumentScanIterator;
+use ONGR\ElasticsearchBundle\Result\IndicesResult;
 use ONGR\ElasticsearchBundle\Result\RawResultIterator;
 use ONGR\ElasticsearchBundle\Result\RawResultScanIterator;
 use ONGR\ElasticsearchBundle\Result\Suggestion\SuggestionIterator;
@@ -50,9 +51,9 @@ class Repository
     private $types = [];
 
     /**
-     * @var array|null
+     * @var array
      */
-    private $fieldsCache = null;
+    private $fieldsCache = [];
 
     /**
      * Constructor.
@@ -70,48 +71,54 @@ class Repository
     /**
      * @return array
      */
-    protected function getTypes()
+    public function getTypes()
     {
         $types = [];
-        $meta = $this->manager->getBundlesMapping();
+        $meta = $this->getManager()->getBundlesMapping($this->namespaces);
 
-        foreach ($meta as $namespace => $repository) {
-            if (empty($this->namespaces) || in_array($namespace, $this->namespaces)) {
-                $types[] = $repository['type'];
-            }
+        foreach ($meta as $namespace => $metadata) {
+            $types[] = $metadata->getType();
         }
 
         return $types;
     }
 
     /**
-     * Returns a single document data by ID.
+     * Returns a single document data by ID or null if document is not found.
      *
-     * @param string $id
+     * @param string $id         Document Id to find.
+     * @param string $resultType Result type returned.
      *
-     * @return DocumentInterface
+     * @return DocumentInterface|null
+     *
      * @throws \LogicException
      */
-    public function find($id)
+    public function find($id, $resultType = self::RESULTS_OBJECT)
     {
-        if (count($this->types) == 1) {
-            $params = [
-                'index' => $this->manager->getConnection()->getIndexName(),
-                'type' => $this->types[0],
-                'id' => $id,
-            ];
-
-            $result = $this->manager->getConnection()->getClient()->get($params);
-
-            $converter = new Converter(
-                $this->manager->getTypesMapping(),
-                $this->manager->getBundlesMapping()
-            );
-
-            return $converter->convertToDocument($result);
-        } else {
+        if (count($this->types) !== 1) {
             throw new \LogicException('Only one type must be specified for the find() method');
         }
+
+        $params = [
+            'index' => $this->getManager()->getConnection()->getIndexName(),
+            'type' => $this->types[0],
+            'id' => $id,
+        ];
+
+        try {
+            $result = $this->getManager()->getConnection()->getClient()->get($params);
+        } catch (Missing404Exception $e) {
+            return null;
+        }
+
+        if ($resultType === self::RESULTS_OBJECT) {
+            return (new Converter(
+                $this->getManager()->getTypesMapping(),
+                $this->getManager()->getBundlesMapping()
+            ))->convertToDocument($result);
+        }
+
+        return $this->parseResult($result, $resultType, '');
     }
 
     /**
@@ -132,10 +139,14 @@ class Repository
         $offset = null,
         $resultType = self::RESULTS_OBJECT
     ) {
-        $search = new Search();
+        $search = $this->createSearch();
 
-        $limit && $search->setSize($limit);
-        $offset && $search->setFrom($offset);
+        if ($limit !== null) {
+            $search->setSize($limit);
+        }
+        if ($offset !== null) {
+            $search->setFrom($offset);
+        }
 
         foreach ($criteria as $field => $value) {
             $search->addQuery(new TermsQuery($field, is_array($value) ? $value : [$value]), 'must');
@@ -171,11 +182,28 @@ class Repository
     public function execute(Search $search, $resultsType = self::RESULTS_OBJECT)
     {
         $results = $this
-            ->manager
+            ->getManager()
             ->getConnection()
             ->search($this->types, $this->checkFields($search->toArray()), $search->getQueryParams());
 
         return $this->parseResult($results, $resultsType, $search->getScroll());
+    }
+
+    /**
+     * Delete by query.
+     *
+     * @param Search $search
+     *
+     * @return array
+     */
+    public function deleteByQuery(Search $search)
+    {
+        $results = $this
+            ->getManager()
+            ->getConnection()
+            ->deleteByQuery($this->types, $search->toArray());
+
+        return new IndicesResult($results);
     }
 
     /**
@@ -194,7 +222,7 @@ class Repository
         $scrollDuration = Search::SCROLL_DURATION,
         $resultsType = self::RESULTS_OBJECT
     ) {
-        $results = $this->manager->getConnection()->scroll($scrollId, $scrollDuration);
+        $results = $this->getManager()->getConnection()->scroll($scrollId, $scrollDuration);
 
         return $this->parseResult($results, $resultsType, $scrollDuration);
     }
@@ -217,7 +245,7 @@ class Repository
         foreach ($suggesters as $suggester) {
             $body = array_merge($suggester->toArray(), $body);
         }
-        $results = $this->manager->getConnection()->getClient()->suggest(['body' => $body]);
+        $results = $this->getManager()->getConnection()->getClient()->suggest(['body' => $body]);
         unset($results['_shards']);
 
         return new SuggestionIterator($results);
@@ -226,21 +254,22 @@ class Repository
     /**
      * Removes a single document data by ID.
      *
-     * @param string $id
+     * @param string $id Document ID to remove.
      *
      * @return array
+     *
      * @throws \LogicException
      */
     public function remove($id)
     {
         if (count($this->types) == 1) {
             $params = [
-                'index' => $this->manager->getConnection()->getIndexName(),
+                'index' => $this->getManager()->getConnection()->getIndexName(),
                 'type' => $this->types[0],
                 'id' => $id,
             ];
 
-            $response = $this->manager->getConnection()->getClient()->delete($params);
+            $response = $this->getManager()->getConnection()->delete($params);
 
             return $response;
         } else {
@@ -261,18 +290,24 @@ class Repository
         if (empty($fields)) {
             return $searchArray;
         }
+
         // Checks if cache is loaded.
-        if ($this->fieldsCache === null) {
-            $mapping = $this->manager->getBundlesMapping();
-            $this->fieldsCache = [];
-            foreach (array_intersect_key($mapping, array_flip($this->namespaces)) as $ns => $properties) {
-                $this->fieldsCache = array_unique(array_merge($this->fieldsCache, array_keys($properties['fields'])));
+        if (empty($this->fieldsCache)) {
+            foreach ($this->getManager()->getBundlesMapping($this->namespaces) as $ns => $properties) {
+                $this->fieldsCache = array_unique(
+                    array_merge(
+                        $this->fieldsCache,
+                        array_keys($properties->getFields())
+                    )
+                );
             }
         }
+
         // Adds cached fields to fields array.
         foreach (array_intersect($this->fieldsCache, $fields) as $field) {
             $searchArray['fields'][] = $field;
         }
+
         // Removes duplicates and checks if its needed to add _source.
         if (!empty($searchArray['fields'])) {
             $searchArray['fields'] = array_unique($searchArray['fields']);
@@ -302,8 +337,8 @@ class Repository
                 if (isset($raw['_scroll_id'])) {
                     $iterator = new DocumentScanIterator(
                         $raw,
-                        $this->manager->getTypesMapping(),
-                        $this->manager->getBundlesMapping()
+                        $this->getManager()->getTypesMapping(),
+                        $this->getManager()->getBundlesMapping()
                     );
                     $iterator
                         ->setRepository($this)
@@ -315,8 +350,8 @@ class Repository
 
                 return new DocumentIterator(
                     $raw,
-                    $this->manager->getTypesMapping(),
-                    $this->manager->getBundlesMapping()
+                    $this->getManager()->getTypesMapping(),
+                    $this->getManager()->getBundlesMapping()
                 );
             case self::RESULTS_ARRAY:
                 return $this->convertToNormalizedArray($raw);
@@ -348,7 +383,12 @@ class Repository
      */
     private function convertToNormalizedArray($data)
     {
+        if (array_key_exists('_source', $data)) {
+            return $data['_source'];
+        }
+
         $output = [];
+
         if (isset($data['hits']['hits'][0]['_source'])) {
             foreach ($data['hits']['hits'] as $item) {
                 $output[] = $item['_source'];
@@ -377,8 +417,18 @@ class Repository
             );
         }
 
-        $class = $this->manager->getBundlesMapping()[reset($this->namespaces)]['namespace'];
+        $class = $this->getManager()->getBundlesMapping()[reset($this->namespaces)]->getProxyNamespace();
 
         return new $class();
+    }
+
+    /**
+     * Returns elasticsearch manager used in this repository for getting/setting documents.
+     *
+     * @return Manager
+     */
+    public function getManager()
+    {
+        return $this->manager;
     }
 }

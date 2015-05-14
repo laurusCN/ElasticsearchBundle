@@ -35,7 +35,7 @@ class ExportService
      * @param int             $chunkSize
      * @param OutputInterface $output
      */
-    public function exportIndex($manager, $filename, $chunkSize, OutputInterface $output)
+    public function exportIndex(Manager $manager, $filename, $chunkSize, OutputInterface $output)
     {
         $types = $manager->getTypesMapping();
         $repo = $manager->getRepository($types);
@@ -44,9 +44,11 @@ class ExportService
 
         if (class_exists('\Symfony\Component\Console\Helper\ProgressBar')) {
             $progress = new ProgressBar($output, $results->getTotalCount());
+            $progress->setRedrawFrequency(100);
             $progress->start();
         } else {
             $progress = new ProgressHelper();
+            $progress->setRedrawFrequency(100);
             $progress->start($output, $results->getTotalCount());
         }
 
@@ -91,7 +93,7 @@ class ExportService
      *
      * @return RawResultIterator
      */
-    protected function getResults($repository, $chunkSize)
+    protected function getResults(Repository $repository, $chunkSize)
     {
         $search = $repository->createSearch();
         $search->setScroll(self::SCROLL_DURATION)

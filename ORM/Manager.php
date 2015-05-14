@@ -13,7 +13,14 @@ namespace ONGR\ElasticsearchBundle\ORM;
 
 use ONGR\ElasticsearchBundle\Client\Connection;
 use ONGR\ElasticsearchBundle\Document\DocumentInterface;
-use ONGR\ElasticsearchBundle\Mapping\MetadataCollector;
+use ONGR\ElasticsearchBundle\Event\ElasticsearchCommitEvent;
+use ONGR\ElasticsearchBundle\Event\ElasticsearchPersistEvent;
+use ONGR\ElasticsearchBundle\Event\Events;
+use ONGR\ElasticsearchBundle\Mapping\ClassMetadata;
+use ONGR\ElasticsearchBundle\Mapping\ClassMetadataCollection;
+use ONGR\ElasticsearchBundle\Result\Converter;
+use Symfony\Component\EventDispatcher\Event;
+use Symfony\Component\EventDispatcher\EventDispatcher;
 
 /**
  * Manager class.
@@ -21,39 +28,33 @@ use ONGR\ElasticsearchBundle\Mapping\MetadataCollector;
 class Manager
 {
     /**
-     * Elasticsearch connection.
-     *
-     * @var Connection
+     * @var Connection Elasticsearch connection.
      */
     private $connection;
 
     /**
-     * @var MetadataCollector
+     * @var ClassMetadataCollection
      */
-    private $metadataCollector;
+    private $classMetadataCollection;
 
     /**
-     * @var array Repository structure info
+     * @var Converter
      */
-    private $bundlesMapping = [];
+    private $converter;
 
     /**
-     * @var array Document type map to repositories
+     * @var EventDispatcher
      */
-    private $typesMapping = [];
+    private $eventDispatcher;
 
     /**
-     * @param Connection|null        $connection
-     * @param MetadataCollector|null $metadataCollector
-     * @param array                  $typesMapping
-     * @param array                  $bundlesMapping
+     * @param Connection              $connection
+     * @param ClassMetadataCollection $classMetadataCollection
      */
-    public function __construct($connection, $metadataCollector, $typesMapping, $bundlesMapping)
+    public function __construct($connection, $classMetadataCollection)
     {
         $this->connection = $connection;
-        $this->metadataCollector = $metadataCollector;
-        $this->typesMapping = $typesMapping;
-        $this->bundlesMapping = $bundlesMapping;
+        $this->classMetadataCollection = $classMetadataCollection;
     }
 
     /**
@@ -67,6 +68,14 @@ class Manager
     }
 
     /**
+     * @param EventDispatcher $eventDispatcher
+     */
+    public function setEventDispatcher($eventDispatcher)
+    {
+        $this->eventDispatcher = $eventDispatcher;
+    }
+
+    /**
      * Returns repository with one or several active selected type.
      *
      * @param string|string[] $type
@@ -77,7 +86,7 @@ class Manager
     {
         $type = is_array($type) ? $type : [$type];
 
-        foreach ($type as $selectedType) {
+        foreach ($type as &$selectedType) {
             $this->checkRepositoryType($selectedType);
         }
 
@@ -99,82 +108,28 @@ class Manager
     /**
      * Adds document to next flush.
      *
-     * @param DocumentInterface $object
+     * @param DocumentInterface $document
      */
-    public function persist(DocumentInterface $object)
+    public function persist(DocumentInterface $document)
     {
-        $repository = $this->getDocumentMapping($object);
-        $document = $this->convertToArray($object, $repository['getters']);
+        $this->dispatchEvent(
+            Events::PRE_PERSIST,
+            new ElasticsearchPersistEvent($this->getConnection(), $document)
+        );
+
+        $mapping = $this->getDocumentMapping($document);
+        $documentArray = $this->getConverter()->convertToArray($document);
 
         $this->getConnection()->bulk(
             'index',
-            $repository['type'],
-            $document
+            $mapping->getType(),
+            $documentArray
         );
-    }
 
-    /**
-     * Converts object to an array.
-     *
-     * @param DocumentInterface $object
-     * @param array             $getters
-     *
-     * @return array
-     */
-    private function convertToArray($object, $getters)
-    {
-        $document = [];
-
-        // Special fields.
-        if ($object instanceof DocumentInterface) {
-            if ($object->getId()) {
-                $document['_id'] = $object->getId();
-            }
-
-            if ($object->hasParent()) {
-                $document['_parent'] = $object->getParent();
-            }
-
-            if ($object->getTtl()) {
-                $document['_ttl'] = $object->getTtl();
-            }
-        }
-
-        foreach ($getters as $field => $getter) {
-            if ($getter['exec']) {
-                $value = $object->{$getter['name']}();
-            } else {
-                $value = $object->{$getter['name']};
-            }
-
-            if ($value && isset($getter['properties'])) {
-                $newValue = null;
-
-                if ($getter['multiple']) {
-                    $this->isTraversable($value);
-                    foreach ($value as $item) {
-                        $this->checkVariableType($item, $getter['namespace']);
-                        $arrayValue = $this->convertToArray($item, $getter['properties']);
-                        $newValue[] = $arrayValue;
-                    }
-                } else {
-                    $this->checkVariableType($value, $getter['namespace']);
-                    $newValue = $this->convertToArray($value, $getter['properties']);
-                }
-
-                $value = $newValue;
-            }
-
-            if ($value instanceof \DateTime) {
-                $value = $value->format(\DateTime::ISO8601);
-            }
-
-            if ($value) {
-                $document[$field] = $value;
-            }
-        }
-
-        return $document;
+        $this->dispatchEvent(
+            Events::POST_PERSIST,
+            new ElasticsearchPersistEvent($this->getConnection(), $document)
+        );
     }
 
     /**
@@ -182,7 +137,17 @@ class Manager
      */
     public function commit()
     {
+        $this->dispatchEvent(
+            Events::PRE_COMMIT,
+            new ElasticsearchCommitEvent($this->getConnection())
+        );
+
         $this->getConnection()->commit();
+
+        $this->dispatchEvent(
+            Events::POST_COMMIT,
+            new ElasticsearchCommitEvent($this->getConnection())
+        );
     }
 
     /**
@@ -202,14 +167,16 @@ class Manager
     }
 
     /**
+     * Returns repository metadata for document.
+     *
      * @param object $document
      *
-     * @return null
+     * @return ClassMetadata|null
      */
     public function getDocumentMapping($document)
     {
-        foreach ($this->bundlesMapping as $repository) {
-            if ($repository['namespace'] == get_class($document)) {
+        foreach ($this->getBundlesMapping() as $repository) {
+            if (in_array(get_class($document), [$repository->getNamespace(), $repository->getProxyNamespace()])) {
                 return $repository;
             }
         }
@@ -218,19 +185,15 @@ class Manager
     }
 
     /**
-     * @return array
+     * Returns bundles mapping.
+     *
+     * @param array $repositories
+     *
+     * @return ClassMetadata[]
      */
-    public function getBundlesMapping()
+    public function getBundlesMapping($repositories = [])
     {
-        return $this->bundlesMapping;
-    }
-
-    /**
-     * @return MetadataCollector
-     */
-    public function getMetadataCollector()
-    {
-        return $this->metadataCollector;
+        return $this->classMetadataCollection->getMetadata($repositories);
     }
 
     /**
@@ -238,7 +201,7 @@ class Manager
      */
     public function getTypesMapping()
     {
-        return $this->typesMapping;
+        return $this->classMetadataCollection->getTypesMap();
     }
 
     /**
@@ -248,47 +211,49 @@ class Manager
      *
      * @throws \InvalidArgumentException
      */
-    private function checkRepositoryType($type)
+    private function checkRepositoryType(&$type)
     {
-        if (!array_key_exists($type, $this->bundlesMapping)) {
-            $exceptionMessage = "Undefined repository {$type}, valid repositories are: " .
-                join(', ', array_keys($this->bundlesMapping)) . '.';
-            throw new \InvalidArgumentException($exceptionMessage);
+        $mapping = $this->getBundlesMapping();
+
+        if (array_key_exists($type, $mapping)) {
+            return;
         }
+
+        if (array_key_exists($type . 'Document', $mapping)) {
+            $type .= 'Document';
+
+            return;
+        }
+
+        $exceptionMessage = "Undefined repository `{$type}`, valid repositories are: `" .
+            join('`, `', array_keys($this->getBundlesMapping())) . '`.';
+        throw new \InvalidArgumentException($exceptionMessage);
     }
 
     /**
-     * Check if class matches the expected one.
+     * Returns converter instance.
      *
-     * @param mixed  $object
-     * @param string $expectedClass
-     *
-     * @throws \InvalidArgumentException
+     * @return Converter
      */
-    private function checkVariableType($object, $expectedClass)
+    private function getConverter()
     {
-        if (!is_object($object)) {
-            $msg = 'Expected variable of type object, got ' . gettype($object) . ". (field isn't multiple)";
-            throw new \InvalidArgumentException($msg);
+        if (!$this->converter) {
+            $this->converter = new Converter($this->getTypesMapping(), $this->getBundlesMapping());
         }
 
-        $class = get_class($object);
-        if ($class != $expectedClass) {
-            throw new \InvalidArgumentException("Expected object of type {$expectedClass}, got {$class}.");
-        }
+        return $this->converter;
     }
 
     /**
-     * Check if object is traversable, throw exception otherwise.
+     * Dispatches an event, if eventDispatcher is set.
      *
-     * @param mixed $value
-     *
-     * @throws \InvalidArgumentException
+     * @param string $eventName
+     * @param Event  $event
      */
-    private function isTraversable($value)
+    private function dispatchEvent($eventName, Event $event)
     {
-        if (!(is_array($value) || (is_object($value) && $value instanceof \Traversable))) {
-            throw new \InvalidArgumentException("Variable isn't traversable, although field is set to multiple.");
+        if ($this->eventDispatcher !== null) {
+            $this->eventDispatcher->dispatch($eventName, $event);
         }
     }
 }

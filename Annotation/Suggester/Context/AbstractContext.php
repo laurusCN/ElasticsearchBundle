@@ -11,10 +11,12 @@
 
 namespace ONGR\ElasticsearchBundle\Annotation\Suggester\Context;
 
+use ONGR\ElasticsearchBundle\Mapping\DumperInterface;
+
 /**
  * Abstract class for various context annotations.
  */
-abstract class AbstractContext
+abstract class AbstractContext implements DumperInterface
 {
     /**
      * @var array
@@ -41,11 +43,9 @@ abstract class AbstractContext
     abstract public function getType();
 
     /**
-     * Returns filtered object data.
-     *
-     * @return array
+     * {@inheritdoc}
      */
-    public function filter()
+    public function dump(array $exclude = [])
     {
         $vars = array_diff_key(
             array_filter(get_object_vars($this)),

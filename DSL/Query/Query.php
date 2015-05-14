@@ -11,23 +11,26 @@
 
 namespace ONGR\ElasticsearchBundle\DSL\Query;
 
-use ONGR\ElasticsearchBundle\DSL\Bool\Bool;
 use ONGR\ElasticsearchBundle\DSL\BuilderInterface;
 
 /**
  * Query class.
+ *
+ * @deprecated will remove in 1.0 Query container now is implemented directly in search.
  */
 class Query implements BuilderInterface
 {
     /**
-     * @var BuilderInterface[] Queries
+     * @var BuilderInterface[]
      */
     private $queries;
 
     /**
      * @var NestedQuery
+     *
+     * @deprecated will remove in 1.0 Add NestedQuery to the Query as all other queries.
      */
-    private $nested = null;
+    private $nested;
 
     /**
      * @param array $boolParams Possible values:
@@ -38,7 +41,7 @@ class Query implements BuilderInterface
      */
     public function __construct($boolParams = [])
     {
-        $this->queries = new Bool();
+        $this->queries = new BoolQuery();
         $this->queries->setParameters($boolParams);
     }
 
@@ -51,7 +54,7 @@ class Query implements BuilderInterface
      */
     public function addQuery(BuilderInterface $query, $boolType = 'must')
     {
-        $this->queries->addToBool($query, $boolType);
+        $this->queries->add($query, $boolType);
     }
 
     /**
@@ -79,6 +82,8 @@ class Query implements BuilderInterface
     /**
      * @param string           $path
      * @param BuilderInterface $query
+     *
+     * @deprecated Will remove in 1.0 Add NestedQuery to the Query as all other queries.
      */
     public function addToNested($path, $query)
     {

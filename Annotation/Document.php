@@ -22,7 +22,7 @@ final class Document
     /**
      * @var bool
      */
-    public $create;
+    public $create = true;
 
     /**
      * @var string
@@ -40,10 +40,12 @@ final class Document
     public $ttl;
 
     /**
-     * Constructor.
+     * @var bool
      */
-    public function __construct()
-    {
-        $this->create = true;
-    }
+    public $enabled;
+
+    /**
+     * @var array
+     */
+    public $all;
 }

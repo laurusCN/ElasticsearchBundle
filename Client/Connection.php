@@ -1,6 +1,6 @@
 <?php
 
- /*
+/*
  * This file is part of the ONGR package.
  *
  * (c) NFQ Technologies UAB <info@nfq.com>
@@ -62,6 +62,11 @@ class Connection
     private $warmers;
 
     /**
+     * @var bool
+     */
+    private $readOnly;
+
+    /**
      * Construct.
      *
      * @param Client $client   Elasticsearch client.
@@ -95,6 +100,8 @@ class Connection
      */
     public function bulk($operation, $type, array $query)
     {
+        $this->isReadOnly('Bulk');
+
         if (!in_array($operation, ['index', 'create', 'update', 'delete'])) {
             throw new \InvalidArgumentException('Wrong bulk operation selected');
         }
@@ -121,7 +128,7 @@ class Connection
                 $this->bulkQueries['body'][] = ['doc' => $query];
                 break;
             case 'delete':
-                // Body for delete opertation is not needed to apply.
+                // Body for delete operation is not needed to apply.
             default:
                 // Do nothing.
                 break;
@@ -147,8 +154,8 @@ class Connection
     public function commit()
     {
         $this->bulkQueries = array_merge($this->bulkQueries, $this->bulkParams);
-        $this->client->bulk($this->bulkQueries);
-        $this->client->indices()->flush();
+        $this->getClient()->bulk($this->bulkQueries);
+        $this->flush();
 
         $this->bulkQueries = [];
     }
@@ -160,7 +167,7 @@ class Connection
      */
     public function refresh()
     {
-        $this->client->indices()->refresh();
+        $this->getClient()->indices()->refresh();
     }
 
     /**
@@ -170,7 +177,45 @@ class Connection
      */
     public function flush()
     {
-        $this->client->indices()->flush();
+        $this->getClient()->indices()->flush();
+    }
+
+    /**
+     * Removes a single document.
+     *
+     * @param array $params Parameters.
+     *
+     *                      $params = [
+     *                      'index' => 'index_name',
+     *                      'type' => 'document_type',
+     *                      'id' => 'id',
+     *                      ];.
+     *
+     * @return array
+     */
+    public function delete($params)
+    {
+        $this->isReadOnly('Delete');
+
+        return $this->getClient()->delete($params);
+    }
+
+    /**
+     * Delete by query.
+     *
+     * @param array $types List of types to search in.
+     * @param array $query Query to execute.
+     *
+     * @return array
+     */
+    public function deleteByQuery(array $types, array $query)
+    {
+        $params = [];
+        $params['index'] = $this->getIndexName();
+        $params['type'] = implode(',', $types);
+        $params['body'] = $query;
+
+        return $this->getClient()->deleteByQuery($params);
     }
 
     /**
@@ -193,7 +238,7 @@ class Connection
             $params = array_merge($queryStringParams, $params);
         }
 
-        return $this->client->search($params);
+        return $this->getClient()->search($params);
     }
 
     /**
@@ -211,17 +256,25 @@ class Connection
         $params['scroll_id'] = $scrollId;
         $params['scroll'] = $scrollDuration;
 
-        return $this->client->scroll($params);
+        return $this->getClient()->scroll($params);
     }
 
     /**
      * Creates fresh elasticsearch index.
-     * 
+     *
      * @param bool $putWarmers Determines if warmers should be loaded.
+     * @param bool $noMapping  Determines if mapping should be included.
      */
-    public function createIndex($putWarmers = false)
+    public function createIndex($putWarmers = false, $noMapping = false)
     {
-        $this->client->indices()->create($this->settings);
+        $this->isReadOnly('Create index');
+
+        $settings = $this->settings;
+
+        if ($noMapping) {
+            unset($settings['body']['mappings']);
+        }
+        $this->getClient()->indices()->create($settings);
 
         if ($putWarmers) {
             // Sometimes Elasticsearch gives service unavailable.
@@ -235,15 +288,103 @@ class Connection
      */
     public function dropIndex()
     {
-        $this->client->indices()->delete(['index' => $this->getIndexName()]);
+        $this->isReadOnly('Drop index');
+
+        $this->getClient()->indices()->delete(['index' => $this->getIndexName()]);
+    }
+
+    /**
+     * Puts mapping into elasticsearch client.
+     *
+     * @param array $types Specific types to put.
+     *
+     * @return int
+     */
+    public function createTypes(array $types = [])
+    {
+        $this->isReadOnly('Create types');
+
+        $mapping = $this->getMapping($types);
+        if (empty($mapping)) {
+            return 0;
+        }
+
+        $mapping = array_diff_key($mapping, $this->getMappingFromIndex($types));
+        if (empty($mapping)) {
+            return -1;
+        }
+
+        $this->loadMappingArray($mapping);
+
+        return 1;
+    }
+
+    /**
+     * Drops mapping from elasticsearch client.
+     *
+     * @param array $types Specific types to drop.
+     *
+     * @return int
+     */
+    public function dropTypes(array $types = [])
+    {
+        $this->isReadOnly('Drop types');
+
+        $mapping = $this->getMapping($types);
+
+        if (empty($mapping)) {
+            return 0;
+        }
+
+        $this->unloadMappingArray(array_keys($mapping));
+
+        return 1;
+    }
+
+    /**
+     * Updates elasticsearch client mapping.
+     *
+     * @param array $types Specific types to update.
+     *
+     * @return int
+     */
+    public function updateTypes(array $types = [])
+    {
+        $this->isReadOnly('Update types');
+
+        if (!$this->getMapping($types)) {
+            return -1;
+        }
+
+        $tempSettings = $this->settings;
+        $tempSettings['index'] = uniqid('mapping_check_');
+        $mappingCheckConnection = new Connection($this->getClient(), $tempSettings);
+        $mappingCheckConnection->createIndex();
+        $mappingCheckConnection->createTypes($types);
+
+        $newMapping = $mappingCheckConnection->getMappingFromIndex($types);
+        $oldMapping = $this->getMappingFromIndex($types);
+
+        $mappingCheckConnection->dropIndex();
+
+        $tool = new MappingTool();
+        $updated = (int)$tool->checkMapping($oldMapping, $newMapping);
+
+        if ($updated) {
+            $this->unloadMappingArray($tool->getRemovedTypes());
+            $this->loadMappingArray($tool->getUpdatedTypes());
+        }
+
+        return $updated;
     }
 
     /**
      * Tries to drop and create fresh elasticsearch index.
-     * 
+     *
      * @param bool $putWarmers Determines if warmers should be loaded.
+     * @param bool $noMapping  Determines if mapping should be included.
      */
-    public function dropAndCreateIndex($putWarmers = false)
+    public function dropAndCreateIndex($putWarmers = false, $noMapping = false)
     {
         try {
             $this->dropIndex();
@@ -251,7 +392,7 @@ class Connection
             // Do nothing because I'm only trying.
         }
 
-        $this->createIndex($putWarmers);
+        $this->createIndex($putWarmers, $noMapping);
     }
 
     /**
@@ -261,7 +402,7 @@ class Connection
      */
     public function indexExists()
     {
-        return $this->client->indices()->exists(['index' => $this->getIndexName()]);
+        return $this->getClient()->indices()->exists(['index' => $this->getIndexName()]);
     }
 
     /**
@@ -285,18 +426,16 @@ class Connection
     }
 
     /**
-     * Returns mapping by type.
+     * Returns mapping by type if defined.
      *
-     * @param string $type Type name.
+     * @param string|array $type Type names.
      *
      * @return array|null
      */
-    public function getMapping($type)
+    public function getMapping($type = [])
     {
-        if (isset($this->settings['body']['mappings'])
-            && array_key_exists($type, $this->settings['body']['mappings'])
-        ) {
-            return $this->settings['body']['mappings'][$type];
+        if (isset($this->settings['body']['mappings'])) {
+            return $this->filterMapping($type, $this->settings['body']['mappings']);
         }
 
         return null;
@@ -324,51 +463,36 @@ class Connection
     }
 
     /**
+     * Sets multiple mappings.
+     *
+     * @param array $mapping Mapping to set.
+     * @param bool  $cleanUp Cleans current mapping.
+     */
+    public function setMultipleMapping(array $mapping, $cleanUp = false)
+    {
+        if ($cleanUp === true) {
+            unset($this->settings['body']['mappings']);
+        }
+
+        foreach ($mapping as $type => $map) {
+            $this->setMapping($type, $map);
+        }
+    }
+
+    /**
      * Mapping is compared with loaded, if needed updates it and returns true.
      *
+     * @param array $types Types to update.
+     *
      * @return bool
+     *
      * @throws \LogicException
+     *
+     * @deprecated Will be removed in 1.0. Please now use Connection#updateTypes().
      */
-    public function updateMapping()
+    public function updateMapping(array $types = [])
     {
-        if (!isset($this->settings['body']['mappings']) || empty($this->settings['body']['mappings'])) {
-            throw new \LogicException('Connection does not have any mapping loaded.');
-        }
-
-        $tempSettings = $this->settings;
-        $tempSettings['index'] = uniqid('mapping_check_');
-        $mappingCheckConnection = new Connection($this->client, $tempSettings);
-        $mappingCheckConnection->createIndex();
-
-        $newMapping = $mappingCheckConnection->getMappingFromIndex();
-        $oldMapping = $this->getMappingFromIndex();
-
-        $mappingCheckConnection->dropIndex();
-
-        $tool = new MappingTool();
-        $updated = $tool->checkMapping($oldMapping, $newMapping);
-
-        if ($updated) {
-            foreach ($tool->getRemovedTypes() as $type) {
-                $this->client->indices()->deleteMapping(
-                    [
-                        'index' => $this->getIndexName(),
-                        'type' => $type,
-                    ]
-                );
-            }
-            foreach ($tool->getUpdatedTypes() as $type => $properties) {
-                $this->client->indices()->putMapping(
-                    [
-                        'index' => $this->getIndexName(),
-                        'type' => $type,
-                        'body' => [$type => $properties],
-                    ]
-                );
-            }
-        }
-
-        return $updated;
+        return $this->updateTypes($types);
     }
 
     /**
@@ -376,6 +500,8 @@ class Connection
      */
     public function close()
     {
+        $this->isReadOnly('Close index');
+
         $this->getClient()->indices()->close(['index' => $this->getIndexName()]);
     }
 
@@ -400,23 +526,27 @@ class Connection
      */
     public function open()
     {
+        $this->isReadOnly('Open index');
+
         $this->getClient()->indices()->open(['index' => $this->getIndexName()]);
     }
 
     /**
      * Returns mapping from index.
      *
+     * @param array|string $types Returns only certain set of types if set.
+     *
      * @return array
      */
-    public function getMappingFromIndex()
+    public function getMappingFromIndex($types = [])
     {
         $mapping = $this
-            ->client
+            ->getClient()
             ->indices()
             ->getMapping(['index' => $this->getIndexName()]);
 
         if (array_key_exists($this->getIndexName(), $mapping)) {
-            return $mapping[$this->getIndexName()]['mappings'];
+            return $this->filterMapping($types, $mapping[$this->getIndexName()]['mappings']);
         }
 
         return [];
@@ -429,7 +559,7 @@ class Connection
      */
     public function getVersionNumber()
     {
-        return $this->client->info()['version']['number'];
+        return $this->getClient()->info()['version']['number'];
     }
 
     /**
@@ -448,16 +578,18 @@ class Connection
     }
 
     /**
-     * Clears elasticsearch cache.
+     * Clears elasticsearch client cache.
      */
     public function clearCache()
     {
-        $this->client->indices()->clearCache(['index' => $this->getIndexName()]);
+        $this->isReadOnly('Clear cache');
+
+        $this->getClient()->indices()->clearCache(['index' => $this->getIndexName()]);
     }
 
     /**
-     * Adds warmer to conatiner.
-     * 
+     * Adds warmer to container.
+     *
      * @param WarmerInterface $warmer
      */
     public function addWarmer(WarmerInterface $warmer)
@@ -467,17 +599,180 @@ class Connection
 
     /**
      * Loads warmers into elasticseach.
+     *
+     * @param array $names Warmers names to put.
+     *
+     * @return bool
      */
-    public function putWarmers()
+    public function putWarmers(array $names = [])
     {
-        foreach ($this->warmers->getWarmers() as $name => $body) {
-            $this->getClient()->indices()->putWarmer(
+        return $this->warmersAction('put', $names);
+    }
+
+    /**
+     * Deletes warmers from elasticsearch index.
+     *
+     * @param array $names Warmers names to delete.
+     *
+     * @return bool
+     */
+    public function deleteWarmers(array $names = [])
+    {
+        return $this->warmersAction('delete', $names);
+    }
+
+    /**
+     * Set connection to read only state.
+     *
+     * @param bool $readOnly
+     */
+    public function setReadOnly($readOnly)
+    {
+        $this->readOnly = $readOnly;
+    }
+
+    /**
+     * Checks if connection is read only.
+     *
+     * @param string $message Error message.
+     *
+     * @throws Forbidden403Exception
+     */
+    public function isReadOnly($message = '')
+    {
+        if ($this->readOnly) {
+            throw new Forbidden403Exception("Manager is readonly! {$message} operation not permitted.");
+        }
+    }
+
+    /**
+     * Executes warmers actions.
+     *
+     * @param string $action Action name.
+     * @param array  $names  Warmers names.
+     *
+     * @return bool
+     *
+     * @throws \LogicException
+     */
+    private function warmersAction($action, $names = [])
+    {
+        $this->isReadOnly('Warmer edit');
+
+        $status = false;
+        $warmers = $this->warmers->getWarmers();
+        $this->validateWarmers($names, array_keys($warmers));
+
+        foreach ($warmers as $name => $body) {
+            if (empty($names) || in_array($name, $names)) {
+                switch ($action) {
+                    case 'put':
+                        $this->getClient()->indices()->putWarmer(
+                            [
+                                'index' => $this->getIndexName(),
+                                'name' => $name,
+                                'body' => $body,
+                            ]
+                        );
+                        break;
+                    case 'delete':
+                        $this->getClient()->indices()->deleteWarmer(
+                            [
+                                'index' => $this->getIndexName(),
+                                'name' => $name,
+                            ]
+                        );
+                        break;
+                    default:
+                        throw new \LogicException('Unknown warmer action');
+                }
+            }
+
+            $status = true;
+        }
+
+        return $status;
+    }
+
+    /**
+     * Warmer names validation.
+     *
+     * @param array $names       Names to check.
+     * @param array $warmerNames Warmer names loaded.
+     *
+     * @throws \RuntimeException
+     */
+    private function validateWarmers($names, $warmerNames = [])
+    {
+        if (empty($warmerNames)) {
+            $warmerNames = array_keys($this->warmers->getWarmers());
+        }
+
+        $unknown = array_diff($names, $warmerNames);
+
+        if (!empty($unknown)) {
+            throw new \RuntimeException(
+                'Warmer(s) named ' . implode(', ', $unknown)
+                . ' do not exist. Available: ' . implode(', ', $warmerNames)
+            );
+        }
+    }
+
+    /**
+     * Puts mapping into elasticsearch.
+     *
+     * @param array $mapping Mapping to put into client.
+     */
+    private function loadMappingArray(array $mapping)
+    {
+        foreach ($mapping as $type => $properties) {
+            $this->getClient()->indices()->putMapping(
                 [
                     'index' => $this->getIndexName(),
-                    'name' => $name,
-                    'body' => $body,
+                    'type' => $type,
+                    'body' => [
+                        $type => $properties,
+                    ],
                 ]
             );
         }
+    }
+
+    /**
+     * Drops mapping from elasticsearch client.
+     *
+     * @param array $mapping Mapping to drop from client.
+     */
+    private function unloadMappingArray(array $mapping)
+    {
+        foreach ($mapping as $type) {
+            $this->getClient()->indices()->deleteMapping(
+                [
+                    'index' => $this->getIndexName(),
+                    'type' => $type,
+                ]
+            );
+        }
+    }
+
+    /**
+     * Filters out mapping from given type.
+     *
+     * @param string|array $type    Types to filter from mapping.
+     * @param array        $mapping Mapping array.
+     *
+     * @return array
+     */
+    private function filterMapping($type, $mapping)
+    {
+        if (empty($type)) {
+            return $mapping;
+        } elseif (is_string($type) && array_key_exists($type, $mapping)) {
+            return $mapping[$type];
+        } elseif (is_array($type)) {
+            return array_intersect_key($mapping, array_flip($type));
+        }
+
+        return [];
     }
 }

@@ -38,7 +38,7 @@ class IndexExportCommandTest extends ElasticsearchTestCase
                         'price' => 32,
                     ],
                 ],
-                'foocontent' => [
+                'fooContent' => [
                     [
                         '_id' => 1,
                         'header' => 'test_1',
@@ -62,7 +62,7 @@ class IndexExportCommandTest extends ElasticsearchTestCase
 
         vfsStream::setup('tmp');
 
-        $command = $app->find('es:index:export');
+        $command = $app->find('ongr:es:index:export');
         $commandTester = new CommandTester($command);
         $commandTester->execute(
             [
@@ -75,13 +75,17 @@ class IndexExportCommandTest extends ElasticsearchTestCase
         $expectedResults = [
             [
                 '_id' => '1',
-                '_type' => 'foocontent',
-                '_source' => ['header' => 'test_1']
+                '_type' => 'fooContent',
+                '_source' => [
+                    'header' => 'test_1',
+                ],
             ],
             [
                 '_id' => '2',
-                '_type' => 'foocontent',
-                '_source' => ['header' => 'test_2']
+                '_type' => 'fooContent',
+                '_source' => [
+                    'header' => 'test_2',
+                ],
             ],
             [
                 '_id' => '1',
@@ -89,7 +93,7 @@ class IndexExportCommandTest extends ElasticsearchTestCase
                 '_source' => [
                     'title' => 'foo',
                     'price' => 10.45,
-                ]
+                ],
             ],
             [
                 '_id' => '2',
@@ -97,7 +101,7 @@ class IndexExportCommandTest extends ElasticsearchTestCase
                 '_source' => [
                     'title' => 'bar',
                     'price' => 32,
-                ]
+                ],
             ],
         ];
 
