@@ -13,7 +13,6 @@ namespace ONGR\ElasticsearchBundle\DataCollector;
 
 use Monolog\Logger;
 use ONGR\ElasticsearchBundle\Logger\Handler\CollectionHandler;
-use ONGR\ElasticsearchBundle\Service\JsonFormatter;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\DataCollector\DataCollectorInterface;
@@ -26,17 +25,27 @@ class ElasticsearchDataCollector implements DataCollectorInterface
     const UNDEFINED_ROUTE = 'undefined_route';
 
     /**
-     * @var Logger[]
+     * @var Logger[] Watched loggers.
      */
     private $loggers = [];
 
     /**
-     * @var array
+     * @var array Queries array.
      */
-    private $data = [];
+    private $queries = [];
 
     /**
-     * @var array
+     * @var int Query count.
+     */
+    private $count = 0;
+
+    /**
+     * @var float Time all queries took.
+     */
+    private $time = .0;
+
+    /**
+     * @var array Registered managers.
      */
     private $managers = [];
 
@@ -73,7 +82,7 @@ class ElasticsearchDataCollector implements DataCollectorInterface
      */
     public function getTime()
     {
-        return round($this->data['time'] * 100, 2);
+        return round($this->time * 100, 2);
     }
 
     /**
@@ -83,7 +92,7 @@ class ElasticsearchDataCollector implements DataCollectorInterface
      */
     public function getQueryCount()
     {
-        return $this->data['count'];
+        return $this->count;
     }
 
     /**
@@ -99,7 +108,7 @@ class ElasticsearchDataCollector implements DataCollectorInterface
      */
     public function getQueries()
     {
-        return $this->data['queries'];
+        return $this->queries;
     }
 
     /**
@@ -140,37 +149,23 @@ class ElasticsearchDataCollector implements DataCollectorInterface
      */
     private function handleRecords($route, $records)
     {
-        $this->incQueryCount(count($records) / 2);
+        $this->count += count($records) / 2;
         $queryBody = '';
         foreach ($records as $record) {
             // First record will never have context.
             if (!empty($record['context'])) {
-                $this->addTime($record['context']['duration']);
+                $this->time += $record['context']['duration'];
                 $this->addQuery($route, $record, $queryBody);
             } else {
-                $position = strpos($record['message'], '-d');
+                $position = strpos($record['message'], ' -d');
                 $queryBody = $position !== false ? substr($record['message'], $position + 3) : '';
             }
         }
     }
 
     /**
-     * Adds time to total.
-     *
-     * @param float $time
-     */
-    private function addTime($time)
-    {
-        if (!isset($this->data['time'])) {
-            $this->data['time'] = .0;
-        }
-
-        $this->data['time'] += $time;
-    }
-
-    /**
      * Adds query to collected data array.
-     * 
+     *
      * @param string $route
      * @param array  $record
      * @param string $queryBody
@@ -178,29 +173,16 @@ class ElasticsearchDataCollector implements DataCollectorInterface
     private function addQuery($route, $record, $queryBody)
     {
         parse_str(parse_url($record['context']['uri'], PHP_URL_QUERY), $httpParameters);
-        $this->data['queries'][$route][] = array_merge(
+        $body = json_decode(trim($queryBody, " '\r\t\n"), true);
+        $this->queries[$route][] = array_merge(
             [
-                'body' => JsonFormatter::prettify(trim($queryBody, "'")),
+                'body' => $body !== null ? json_encode($body, JSON_PRETTY_PRINT) : '',
                 'method' => $record['context']['method'],
                 'httpParameters' => $httpParameters,
                 'time' => $record['context']['duration'] * 100,
             ],
             array_diff_key(parse_url($record['context']['uri']), array_flip(['query']))
         );
-    }
-
-    /**
-     * Increases query count.
-     *
-     * @param int $count
-     */
-    private function incQueryCount($count = 1)
-    {
-        if (!isset($this->data['count'])) {
-            $this->data['count'] = 0;
-        }
-
-        $this->data['count'] += $count;
     }
 
     /**

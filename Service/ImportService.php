@@ -50,15 +50,17 @@ class ImportService
      * @param OutputInterface $output
      * @param int             $bulkSize
      */
-    protected function executeRawImport($manager, $filename, $output, $bulkSize)
+    protected function executeRawImport(Manager $manager, $filename, OutputInterface $output, $bulkSize)
     {
         $reader = $this->getReader($manager, $filename, false);
 
         if (class_exists('\Symfony\Component\Console\Helper\ProgressBar')) {
             $progress = new ProgressBar($output, $reader->count());
+            $progress->setRedrawFrequency(100);
             $progress->start();
         } else {
             $progress = new ProgressHelper();
+            $progress->setRedrawFrequency(100);
             $progress->start($output, $reader->count());
         }
 
@@ -70,12 +72,15 @@ class ImportService
 
             if (($key + 1) % $bulkSize == 0) {
                 $manager->commit();
-                $progress->advance($bulkSize);
             }
+
+            $progress->advance();
         }
 
-        $manager->commit();
-        $progress->advance($reader->count() % $bulkSize);
+        if (($key + 1) % $bulkSize != 0) {
+            $manager->commit();
+        }
+
         $progress->finish();
         $output->writeln('');
     }

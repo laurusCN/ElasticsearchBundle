@@ -34,6 +34,7 @@ class MultiMatchTest extends ElasticsearchTestCase
      *              ]
      *          ]
      *      ]
+     *
      * @return array
      */
     protected function getDataArray()
@@ -109,7 +110,7 @@ class MultiMatchTest extends ElasticsearchTestCase
         /** @var Repository $repo */
         $repo = $this->getManager()->getRepository('AcmeTestBundle:Product');
 
-        $multiMatchQuery = new MultiMatchQuery($query, $fields);
+        $multiMatchQuery = new MultiMatchQuery($fields, $query);
 
         $search = $repo->createSearch()->addQuery($multiMatchQuery);
 

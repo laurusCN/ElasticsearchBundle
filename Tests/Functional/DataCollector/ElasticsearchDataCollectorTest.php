@@ -12,14 +12,14 @@
 namespace ONGR\ElasticsearchBundle\Tests\Functional\DataCollector;
 
 use ONGR\ElasticsearchBundle\DataCollector\ElasticsearchDataCollector;
+use ONGR\ElasticsearchBundle\DSL\Query\TermQuery;
+use ONGR\ElasticsearchBundle\ORM\Repository;
 use ONGR\ElasticsearchBundle\Test\ElasticsearchTestCase;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 
 class ElasticsearchDataCollectorTest extends ElasticsearchTestCase
 {
-    const START_QUERY_COUNT = 8;
-
     /**
      * {@inheritdoc}
      */
@@ -60,7 +60,7 @@ class ElasticsearchDataCollectorTest extends ElasticsearchTestCase
         $manager->commit();
 
         // Four queries executed while index was being created.
-        $this->assertEquals(4, $this->getCollector()->getQueryCount() - self::START_QUERY_COUNT);
+        $this->greaterThanOrEqual(4, $this->getCollector()->getQueryCount());
     }
 
     /**
@@ -86,16 +86,12 @@ class ElasticsearchDataCollectorTest extends ElasticsearchTestCase
         $queries = $this->getCollector()->getQueries();
 
         $lastQuery = end($queries[ElasticsearchDataCollector::UNDEFINED_ROUTE]);
-        $time = $lastQuery['time'];
-        unset($lastQuery['time']);
+        $this->checkQueryParameters($lastQuery);
 
-        $this->assertGreaterThan(0.0, $time, 'Time should be greater than 0');
         $this->assertEquals(
             [
                 'body' => '',
                 'method' => 'GET',
-                'path' => '/ongr-elasticsearch-bundle-test/product/2',
-                'host' => '127.0.0.1',
                 'httpParameters' => [],
                 'scheme' => 'http',
                 'port' => 9200,
@@ -103,6 +99,56 @@ class ElasticsearchDataCollectorTest extends ElasticsearchTestCase
             $lastQuery,
             'Logged data did not match expected data.'
         );
+    }
+
+    /**
+     * Tests if term query is correct.
+     */
+    public function testGetTermQuery()
+    {
+        $manager = $this->getManager();
+
+        $repository = $manager->getRepository('AcmeTestBundle:Product');
+        $search = $repository
+            ->createSearch()
+            ->addQuery(new TermQuery('title', 'pizza'));
+        $result = $repository->execute($search, Repository::RESULTS_OBJECT);
+
+        $queries = $this->getCollector()->getQueries();
+        $lastQuery = end($queries[ElasticsearchDataCollector::UNDEFINED_ROUTE]);
+        $this->checkQueryParameters($lastQuery);
+
+        $this->assertEquals(
+            [
+                'body' => $this->getFileContents('collector_body_0.json'),
+                'method' => 'POST',
+                'httpParameters' => [],
+                'scheme' => 'http',
+                'port' => 9200,
+            ],
+            $lastQuery,
+            'Logged data did not match expected data.'
+        );
+    }
+
+    /**
+     * Checks query parameters that are not static.
+     *
+     * @param array $query
+     */
+    public function checkQueryParameters(&$query)
+    {
+        $this->assertArrayHasKey('time', $query, 'Query should have time set.');
+        $this->assertGreaterThan(0.0, $query['time'], 'Time should be greater than 0');
+        unset($query['time']);
+
+        $this->assertArrayHasKey('host', $query, 'Query should have host set.');
+        $this->assertNotEmpty($query['host'], 'Host should not be empty');
+        unset($query['host']);
+
+        $this->assertArrayHasKey('path', $query, 'Query should have host path set.');
+        $this->assertNotEmpty($query['path'], 'Path should not be empty.');
+        unset($query['path']);
     }
 
     /**
@@ -114,5 +160,23 @@ class ElasticsearchDataCollectorTest extends ElasticsearchTestCase
         $collector->collect(new Request(), new Response());
 
         return $collector;
+    }
+
+    /**
+     * Returns file contents from fixture.
+     *
+     * @param string $filename
+     *
+     * @return string
+     */
+    private function getFileContents($filename)
+    {
+        $contents = file_get_contents(__DIR__ . '/../../app/fixture/Json/' . $filename);
+        // Checks for new line at the end of file.
+        if (substr($contents, -1) == "\n") {
+            $contents = substr($contents, 0, -1);
+        }
+
+        return $contents;
     }
 }

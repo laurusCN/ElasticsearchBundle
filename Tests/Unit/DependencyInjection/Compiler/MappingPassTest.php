@@ -34,8 +34,22 @@ class MappingPassTest extends \PHPUnit_Framework_TestCase
             ->disableOriginalConstructor()
             ->getMock();
 
-        $metadataCollectorMock->expects($this->any())->method('getMapping')->willReturn(['connection' => 'bar']);
-        $metadataCollectorMock->expects($this->any())->method('getBundleMapping')->willReturn([$bundleMappingData]);
+        $metadataCollectorMock->expects($this->any())->method('getClientMapping')->willReturn(
+            [
+                'AcmeTestBundle:Bar' => [
+                    'properties' => [],
+                ],
+                'AcmeTestBundle:Product' => [
+                    'properties' => [
+                        'name' => [
+                            'type' => 'string',
+                        ],
+                    ],
+                ],
+            ]
+        );
+        $metadataCollectorMock->expects($this->any())->method('getMapping')->willReturn([$bundleMappingData]);
+        $metadataCollectorMock->expects($this->any())->method('getProxyPaths')->willReturn([]);
 
         $this->container = $this->getMockBuilder('\Symfony\Component\DependencyInjection\ContainerBuilder')
             ->disableOriginalConstructor()
@@ -89,11 +103,13 @@ class MappingPassTest extends \PHPUnit_Framework_TestCase
             'default' => [
                 'connection' => 'default',
                 'debug' => true,
+                'readonly' => false,
                 'mappings' => ['AcmeTestBundle'],
             ],
             'bar' => [
                 'connection' => 'bar',
                 'debug' => false,
+                'readonly' => false,
                 'mappings' => ['ONGRElasticsearchBundle'],
             ],
         ];
@@ -131,6 +147,7 @@ class MappingPassTest extends \PHPUnit_Framework_TestCase
             'default' => [
                 'connection' => 'foo',
                 'debug' => true,
+                'readonly' => false,
                 'mappings' => ['AcmeTestBundle'],
             ],
         ];
@@ -156,7 +173,6 @@ class MappingPassTest extends \PHPUnit_Framework_TestCase
     /**
      * Check when Manager Mapping is empty.
      */
-
     public function testWhenManagerMappingIsEmpty()
     {
         $expectedConnections = [
@@ -173,6 +189,7 @@ class MappingPassTest extends \PHPUnit_Framework_TestCase
             'default' => [
                 'connection' => 'default',
                 'debug' => true,
+                'readonly' => false,
                 'mappings' => [],
             ],
         ];

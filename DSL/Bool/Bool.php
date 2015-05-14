@@ -12,63 +12,27 @@
 namespace ONGR\ElasticsearchBundle\DSL\Bool;
 
 use ONGR\ElasticsearchBundle\DSL\BuilderInterface;
-use ONGR\ElasticsearchBundle\DSL\ParametersTrait;
+use ONGR\ElasticsearchBundle\DSL\Query\BoolQuery;
 
 /**
- * Class Bool.
+ * Bool operator. Can be used for filters and queries.
+ *
+ * @deprecated Will be removed in 1.0. Use ONGR\ElasticsearchBundle\DSL\Query\BoolQuery.
  */
-class Bool implements BuilderInterface
+class Bool extends BoolQuery
 {
-    use ParametersTrait;
-
     /**
-     * @var array
-     */
-    private $container = [];
-
-    /**
-     * Checks if bool filter is relevant.
-     *
-     * @return bool
-     */
-    public function isRelevant()
-    {
-        return (bool)count($this->container);
-    }
-
-    /**
-     * Add BuilderInterface object ot bool filter.
+     * Add BuilderInterface object to bool operator.
      *
      * @param BuilderInterface $bool
      * @param string           $type
+     *
+     * @throws \UnexpectedValueException
+     *
+     * @deprecated Will be removed in 1.0. Use ONGR\ElasticsearchBundle\DSL\Query\BoolQuery::add().
      */
-    public function addToBool(BuilderInterface $bool, $type = 'must')
+    public function addToBool(BuilderInterface $bool, $type = BoolQuery::MUST)
     {
-        $this->container[$type][] = $bool;
-    }
-
-    /**
-     * {@inheritdoc}
-     */
-    public function getType()
-    {
-        return 'bool';
-    }
-
-    /**
-     * {@inheritdoc}
-     */
-    public function toArray()
-    {
-        $output = $this->processArray();
-
-        foreach ($this->container as $type => $filters) {
-            /** @var BuilderInterface $bool */
-            foreach ($filters as $bool) {
-                $output[$type][] = [$bool->getType() => $bool->toArray()];
-            }
-        }
-
-        return $output;
+        $this->add($bool, $type);
     }
 }
